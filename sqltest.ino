@@ -3,6 +3,10 @@
 #include "time.h"
 #include <ESP32Time.h>
 ESP32Time rtc(0);  // offset in seconds, use 0 because NTP already offset
+#include <Adafruit_ADS1X15.h>
+Adafruit_ADS1115 ads;
+int16_t adc0, adc1, adc2, adc3;
+float volts0, volts1, volts2, volts3;
 
 #include <OneWire.h>
 #include <DallasTemperature.h>
@@ -21,10 +25,11 @@ RTC_DATA_ATTR int readingCnt = 0;
 typedef struct {
   float temp;
   unsigned long   time;
+  float volts;
 } sensorReadings;
 
-#define maximumReadings 6 // The maximum number of readings that can be stored in the available space
-#define sleeptimeSecs   5 // Every 10-mins of sleep 10 x 60-secs
+#define maximumReadings 10 // The maximum number of readings that can be stored in the available space
+#define sleeptimeSecs   60 // Every 10-mins of sleep 10 x 60-secs
 
 RTC_DATA_ATTR sensorReadings Readings[maximumReadings];
 
@@ -221,30 +226,47 @@ error:
 
 int i;
 
+void gotosleep() {
+      WiFi.disconnect();
+      esp_sleep_enable_timer_wakeup(sleeptimeSecs * 1000000);
+      esp_deep_sleep_start();
+      delay(1000);
+}
+
 
 void setup(void)
 {
+  setCpuFrequencyMhz(80);
+  ads.setGain(GAIN_ONE);  // 1x gain   +/- 4.096V  1 bit = 2mV      0.125mV
+  ads.begin();
     pinMode(LED_BUILTIN, OUTPUT);
     Serial.begin(115200);
     if ((readingCnt == 0)) {
         WiFi.begin((char *)ssid, pass);
-        while (WiFi.status() != WL_CONNECTED) {
-            delay(250);
+        while (WiFi.status() != WL_CONNECTED && millis() < 15000) {
+          delay(500);
         }
+        if (WiFi.status() != WL_CONNECTED && millis() >= 15000) {
+        }
+        else {
         configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
         
         struct tm timeinfo;
         getLocalTime(&timeinfo);
         rtc.setTimeStruct(timeinfo); 
         delay(250);
+        }
       }
     sensors.begin();
 
       digitalWrite(LED_BUILTIN, HIGH);
       sensors.requestTemperatures(); 
       tempC = sensors.getTempCByIndex(0);
+      adc0 = ads.readADC_SingleEnded(0);
+      volts0 = ads.computeVolts(adc0)*2.0;
       Readings[readingCnt].temp = tempC;       // Units °C
       Readings[readingCnt].time = rtc.getEpoch(); 
+      Readings[readingCnt].volts = volts0;
       digitalWrite(LED_BUILTIN, LOW);        
       delay(1000);
       readingCnt++;
@@ -253,14 +275,18 @@ void setup(void)
 
   if (readingCnt >= maximumReadings) {
         WiFi.begin((char *)ssid, pass);
-        while (WiFi.status() != WL_CONNECTED) {
-            delay(250);
-        }
+  while (WiFi.status() != WL_CONNECTED && millis() < 15000) {
+    delay(500);
+  }
+  if (WiFi.status() != WL_CONNECTED && millis() >= 15000) {
+    readingCnt = 0;
+    gotosleep();
+  }
         while (i<maximumReadings) {
           checkConnection();
           doPg();
           if ((pg_status == 2) && (i<maximumReadings)){
-            tosendstr = "insert into burst values(24,1," + String(Readings[i].time) + "," + String(Readings[i].temp) + ")";
+            tosendstr = "insert into burst values(24," + String(Readings[i].volts) + "," + String(Readings[i].time) + "," + String(Readings[i].temp) + ")";
             conn.execute(tosendstr.c_str());
             pg_status = 3;
             delay(50);
@@ -268,10 +294,10 @@ void setup(void)
           }
           delay(50);
         }
+        readingCnt = 0;
   } 
     if (readingCnt < maximumReadings) {
-      esp_sleep_enable_timer_wakeup(sleeptimeSecs * 1000000);
-    esp_deep_sleep_start();
+        gotosleep();
     }
 }
 
