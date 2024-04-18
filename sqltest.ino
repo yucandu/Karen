@@ -231,14 +231,12 @@ void setup(void)
         while (WiFi.status() != WL_CONNECTED) {
             delay(250);
         }
-          configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-        delay(250);
+        configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+        
         struct tm timeinfo;
         getLocalTime(&timeinfo);
-        hours = timeinfo.tm_hour;
-        mins = timeinfo.tm_min;
-        secs = timeinfo.tm_sec;
-        rtc.setTime(secs, mins, hours, timeinfo.tm_mday, timeinfo.tm_mon, timeinfo.tm_year);
+        rtc.setTimeStruct(timeinfo); 
+        delay(250);
       }
     sensors.begin();
     while (readingCnt < maximumReadings)
