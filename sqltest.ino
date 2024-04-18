@@ -20,7 +20,7 @@ RTC_DATA_ATTR int readingCnt = 0;
 
 typedef struct {
   float temp;
-  long   time;
+  unsigned long   time;
 } sensorReadings;
 
 #define maximumReadings 6 // The maximum number of readings that can be stored in the available space
@@ -226,7 +226,7 @@ void setup(void)
 {
     pinMode(LED_BUILTIN, OUTPUT);
     Serial.begin(115200);
-    if ((readingCnt == 0) || (readingCnt >= maximumReadings)) {
+    if ((readingCnt == 0)) {
         WiFi.begin((char *)ssid, pass);
         while (WiFi.status() != WL_CONNECTED) {
             delay(250);
@@ -239,9 +239,7 @@ void setup(void)
         delay(250);
       }
     sensors.begin();
-    while (readingCnt < maximumReadings)
-    {
-      
+
       digitalWrite(LED_BUILTIN, HIGH);
       sensors.requestTemperatures(); 
       tempC = sensors.getTempCByIndex(0);
@@ -250,10 +248,14 @@ void setup(void)
       digitalWrite(LED_BUILTIN, LOW);        
       delay(1000);
       readingCnt++;
-    }
+
 
 
   if (readingCnt >= maximumReadings) {
+        WiFi.begin((char *)ssid, pass);
+        while (WiFi.status() != WL_CONNECTED) {
+            delay(250);
+        }
         while (i<maximumReadings) {
           checkConnection();
           doPg();
@@ -267,9 +269,10 @@ void setup(void)
           delay(50);
         }
   } 
-
-  //    esp_sleep_enable_timer_wakeup(sleeptimeSecs * 1000000);
-  //  esp_deep_sleep_start();
+    if (readingCnt < maximumReadings) {
+      esp_sleep_enable_timer_wakeup(sleeptimeSecs * 1000000);
+    esp_deep_sleep_start();
+    }
 }
 
 
