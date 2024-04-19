@@ -297,7 +297,7 @@ void setup(void)
         checkConnection();
         doPg();
         if ((pg_status == 2) && (i<maximumReadings)){
-          tosendstr = "insert into burst values(24," + String(Readings[i].volts,4) + "," + String(Readings[i].time) + "," + String(Readings[i].temp,3) + ")";
+          tosendstr = "insert into burst values (24,1," + String(Readings[i].time) + "," + String(Readings[i].temp,3) + "), (24,2," + String(Readings[i].time) + "," + String(Readings[i].volts,4) + ")";
           conn.execute(tosendstr.c_str());
           pg_status = 3;
           delay(50);
