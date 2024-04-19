@@ -20,7 +20,7 @@ OneWire oneWire(ONE_WIRE_BUS);
 // Pass our oneWire reference to Dallas Temperature. 
 DallasTemperature sensors(&oneWire);
 
-RTC_DATA_ATTR int readingCnt = 0;
+RTC_DATA_ATTR int readingCnt = -1;
 
 typedef struct {
   float temp;
@@ -28,8 +28,9 @@ typedef struct {
   float volts;
 } sensorReadings;
 
-#define maximumReadings 10 // The maximum number of readings that can be stored in the available space
+#define maximumReadings 60 // The maximum number of readings that can be stored in the available space
 #define sleeptimeSecs   60 // Every 10-mins of sleep 10 x 60-secs
+#define WIFI_TIMEOUT 10000
 
 RTC_DATA_ATTR sensorReadings Readings[maximumReadings];
 
@@ -228,6 +229,7 @@ int i;
 
 void gotosleep() {
       WiFi.disconnect();
+      delay(1);
       esp_sleep_enable_timer_wakeup(sleeptimeSecs * 1000000);
       esp_deep_sleep_start();
       delay(1000);
@@ -239,66 +241,80 @@ void setup(void)
   setCpuFrequencyMhz(80);
   ads.setGain(GAIN_ONE);  // 1x gain   +/- 4.096V  1 bit = 2mV      0.125mV
   ads.begin();
-    pinMode(LED_BUILTIN, OUTPUT);
-    Serial.begin(115200);
-    if ((readingCnt == 0)) {
-        WiFi.begin((char *)ssid, pass);
-        while (WiFi.status() != WL_CONNECTED && millis() < 15000) {
-          delay(500);
-        }
-        if (WiFi.status() != WL_CONNECTED && millis() >= 15000) {
-        }
-        else {
-        configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-        
-        struct tm timeinfo;
-        getLocalTime(&timeinfo);
-        rtc.setTimeStruct(timeinfo); 
+
+  Serial.begin(115200);
+
+  if ((readingCnt == -1)) {
+      WiFi.begin((char *)ssid, pass);
+      while (WiFi.status() != WL_CONNECTED && millis() < WIFI_TIMEOUT) {
         delay(250);
-        }
       }
-    sensors.begin();
+      if (WiFi.status() == WL_CONNECTED) {
+          configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+          
+          struct tm timeinfo;
+          getLocalTime(&timeinfo);
+          rtc.setTimeStruct(timeinfo);
+          WiFi.disconnect(); 
+          readingCnt++;
+          delay(1);
+          esp_sleep_enable_timer_wakeup(1 * 1000000);
+          esp_deep_sleep_start();
+          delay(1000);
+      }
+  }
 
-      digitalWrite(LED_BUILTIN, HIGH);
-      sensors.requestTemperatures(); 
-      tempC = sensors.getTempCByIndex(0);
-      adc0 = ads.readADC_SingleEnded(0);
-      volts0 = ads.computeVolts(adc0)*2.0;
-      Readings[readingCnt].temp = tempC;       // Units °C
-      Readings[readingCnt].time = rtc.getEpoch(); 
-      Readings[readingCnt].volts = volts0;
-      digitalWrite(LED_BUILTIN, LOW);        
-      delay(1000);
-      readingCnt++;
-
-
+  sensors.begin();  
+  sensors.requestTemperatures(); 
+  tempC = sensors.getTempCByIndex(0);
+  adc0 = ads.readADC_SingleEnded(0);
+  volts0 = ads.computeVolts(adc0)*2.0;
+  Readings[readingCnt].temp = tempC;       // Units °C
+  Readings[readingCnt].time = rtc.getEpoch(); 
+  Readings[readingCnt].volts = volts0;
+  readingCnt++;
 
   if (readingCnt >= maximumReadings) {
-        WiFi.begin((char *)ssid, pass);
-  while (WiFi.status() != WL_CONNECTED && millis() < 15000) {
-    delay(500);
-  }
-  if (WiFi.status() != WL_CONNECTED && millis() >= 15000) {
-    readingCnt = 0;
-    gotosleep();
-  }
-        while (i<maximumReadings) {
-          checkConnection();
-          doPg();
-          if ((pg_status == 2) && (i<maximumReadings)){
-            tosendstr = "insert into burst values(24," + String(Readings[i].volts) + "," + String(Readings[i].time) + "," + String(Readings[i].temp) + ")";
-            conn.execute(tosendstr.c_str());
-            pg_status = 3;
-            delay(50);
-            i++;
-          }
-          delay(50);
+      readingCnt = maximumReadings; 
+      WiFi.begin((char *)ssid, pass);
+
+      while (WiFi.status() != WL_CONNECTED && millis() < WIFI_TIMEOUT) {
+        delay(500);
+      }
+      if (WiFi.status() != WL_CONNECTED && millis() >= WIFI_TIMEOUT) {
+        for (int i = 0; i < maximumReadings; i++) {
+          Readings[i].temp = Readings[i+1].temp;
+          Readings[i].time = Readings[i+1].time;
+          Readings[i].volts = Readings[i+1].volts;
         }
-        readingCnt = 0;
+          Readings[maximumReadings].temp = tempC;       // Units °C
+          Readings[maximumReadings].time = rtc.getEpoch(); 
+          Readings[maximumReadings].volts = volts0;
+        gotosleep();
+      }
+
+      while (i<maximumReadings) {
+        checkConnection();
+        doPg();
+        if ((pg_status == 2) && (i<maximumReadings)){
+          tosendstr = "insert into burst values(24," + String(Readings[i].volts,4) + "," + String(Readings[i].time) + "," + String(Readings[i].temp,3) + ")";
+          conn.execute(tosendstr.c_str());
+          pg_status = 3;
+          delay(50);
+          i++;
+        }
+        delay(50);
+      }
+
+      readingCnt = -1;
+      gotosleep();
+
   } 
+
     if (readingCnt < maximumReadings) {
         gotosleep();
     }
+
 }
 
 
