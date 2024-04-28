@@ -8,29 +8,23 @@ Adafruit_ADS1115 ads;
 int16_t adc0, adc1, adc2, adc3;
 float volts0, volts1, volts2, volts3;
 
-#include <OneWire.h>
-#include <DallasTemperature.h>
+#include "Adafruit_SHT31.h"
 
-#define ONE_WIRE_BUS 2
-#define LED_BUILTIN 8
-
-// Setup a oneWire instance to communicate with any OneWire devices (not just Maxim/Dallas temperature ICs)
-OneWire oneWire(ONE_WIRE_BUS);
-
-// Pass our oneWire reference to Dallas Temperature. 
-DallasTemperature sensors(&oneWire);
+Adafruit_SHT31 sht31 = Adafruit_SHT31();
 
 RTC_DATA_ATTR int readingCnt = -1;
 
 typedef struct {
   float temp;
+  float hum;
   unsigned long   time;
   float volts;
 } sensorReadings;
 
-#define maximumReadings 60 // The maximum number of readings that can be stored in the available space
+#define maximumReadings 120 // The maximum number of readings that can be stored in the available space
 #define sleeptimeSecs   60 // Every 10-mins of sleep 10 x 60-secs
 #define WIFI_TIMEOUT 10000
+#define bufferShift 10 //amount to shift the array left and keep sampling when buffer is full but no wifi is found
 
 RTC_DATA_ATTR sensorReadings Readings[maximumReadings];
 
@@ -38,7 +32,7 @@ const char* ntpServer = "pool.ntp.org";
 const long gmtOffset_sec = -18000;  //Replace with your GMT offset (secs)
 const int daylightOffset_sec = 3600;   //Replace with your daylight offset (secs)
 int hours, mins, secs;
-float tempC;
+float tempC, tempSHT, humSHT;
 bool sent = false;
 
 IPAddress PGIP(192,168,50,197);        // your PostgreSQL server IP
@@ -241,8 +235,11 @@ void setup(void)
   setCpuFrequencyMhz(80);
   ads.setGain(GAIN_ONE);  // 1x gain   +/- 4.096V  1 bit = 2mV      0.125mV
   ads.begin();
-
-  Serial.begin(115200);
+  adc0 = ads.readADC_SingleEnded(0);
+  volts0 = ads.computeVolts(adc0)*2.0;
+  sht31.begin(0x44);
+  tempSHT = sht31.readTemperature();
+  humSHT = sht31.readHumidity();
 
   if ((readingCnt == -1)) {
       WiFi.begin((char *)ssid, pass);
@@ -264,12 +261,10 @@ void setup(void)
       }
   }
 
-  sensors.begin();  
-  sensors.requestTemperatures(); 
-  tempC = sensors.getTempCByIndex(0);
-  adc0 = ads.readADC_SingleEnded(0);
-  volts0 = ads.computeVolts(adc0)*2.0;
-  Readings[readingCnt].temp = tempC;       // Units °C
+
+
+  Readings[readingCnt].temp = tempSHT;  
+  Readings[readingCnt].hum = humSHT;     // Units °C
   Readings[readingCnt].time = rtc.getEpoch(); 
   Readings[readingCnt].volts = volts0;
   readingCnt++;
@@ -282,14 +277,17 @@ void setup(void)
         delay(500);
       }
       if (WiFi.status() != WL_CONNECTED && millis() >= WIFI_TIMEOUT) {
-        for (int i = 0; i < maximumReadings; i++) {
-          Readings[i].temp = Readings[i+1].temp;
-          Readings[i].time = Readings[i+1].time;
-          Readings[i].volts = Readings[i+1].volts;
+        for (int i = 0; i < (maximumReadings - bufferShift); i++) {
+          Readings[i].temp = Readings[i+bufferShift].temp;
+          Readings[i].hum = Readings[i+bufferShift].hum;
+          Readings[i].time = Readings[i+bufferShift].time;
+          Readings[i].volts = Readings[i+bufferShift].volts;
         }
-          Readings[maximumReadings].temp = tempC;       // Units °C
-          Readings[maximumReadings].time = rtc.getEpoch(); 
-          Readings[maximumReadings].volts = volts0;
+          Readings[maximumReadings - bufferShift].temp = tempSHT;       // Units °C
+          Readings[maximumReadings - bufferShift].hum = humSHT;
+          Readings[maximumReadings - bufferShift].time = rtc.getEpoch(); 
+          Readings[maximumReadings - bufferShift].volts = volts0;
+        readingCnt = (maximumReadings - bufferShift); 
         gotosleep();
       }
 
@@ -297,7 +295,7 @@ void setup(void)
         checkConnection();
         doPg();
         if ((pg_status == 2) && (i<maximumReadings)){
-          tosendstr = "insert into burst values (24,1," + String(Readings[i].time) + "," + String(Readings[i].temp,3) + "), (24,2," + String(Readings[i].time) + "," + String(Readings[i].volts,4) + ")";
+          tosendstr = "insert into burst values (24,1," + String(Readings[i].time) + "," + String(Readings[i].temp,3) + "), (24,2," + String(Readings[i].time) + "," + String(Readings[i].volts,4) + "), (24,3," + String(Readings[i].time) + "," + String(Readings[i].hum,3) + ")";
           conn.execute(tosendstr.c_str());
           pg_status = 3;
           delay(50);
