@@ -5,20 +5,24 @@
 ESP32Time rtc(0);  // offset in seconds, use 0 because NTP already offset
 #include <Adafruit_ADS1X15.h>
 Adafruit_ADS1115 ads;
-int16_t adc0, adc1, adc2, adc3;
-float volts0, volts1, volts2, volts3;
+int16_t adc0, adc1, adc23diff;
+float volts0, volts1, voltsdiff;
+
 
 #include "Adafruit_SHT31.h"
 
 Adafruit_SHT31 sht31 = Adafruit_SHT31();
 
 RTC_DATA_ATTR int readingCnt = -1;
+//RTC_DATA_ATTR int arrayCnt = 0;
 
 typedef struct {
   float temp;
   float hum;
   unsigned long   time;
   float volts;
+  float solarvolts;
+  float current;
 } sensorReadings;
 
 #define maximumReadings 120 // The maximum number of readings that can be stored in the available space
@@ -52,7 +56,7 @@ WiFiClient client;
 char buffer[1024];
 PGconnection conn(&client, 0, 1024, buffer);
 
-char tosend[128];
+char tosend[192];
 String tosendstr;
 
 
@@ -135,8 +139,8 @@ void doPg(void)
     }
     if (pg_status == 2) {
         if (!Serial.available()) return;
-        char inbuf[128];
-        int n = Serial.readBytesUntil('\n',inbuf,127);
+        char inbuf[192];
+        int n = Serial.readBytesUntil('\n',inbuf,191);
         while (n > 0) {
             if (isspace(inbuf[n-1])) n--;
             else break;
@@ -236,7 +240,13 @@ void setup(void)
   ads.setGain(GAIN_ONE);  // 1x gain   +/- 4.096V  1 bit = 2mV      0.125mV
   ads.begin();
   adc0 = ads.readADC_SingleEnded(0);
+  adc1 = ads.readADC_SingleEnded(1);
   volts0 = ads.computeVolts(adc0)*2.0;
+  volts1 = ads.computeVolts(adc1)*2.0;
+  
+  ads.setGain(GAIN_SIXTEEN);    // 16x gain  +/- 0.256V  1 bit = 0.125mV  0.0078125mV
+  adc23diff = ads.readADC_Differential_2_3();
+  voltsdiff = 1000.0*ads.computeVolts(adc23diff);
   sht31.begin(0x44);
   tempSHT = sht31.readTemperature();
   humSHT = sht31.readHumidity();
@@ -267,6 +277,8 @@ void setup(void)
   Readings[readingCnt].hum = humSHT;     // Units °C
   Readings[readingCnt].time = rtc.getEpoch(); 
   Readings[readingCnt].volts = volts0;
+  Readings[readingCnt].solarvolts = volts1;
+  Readings[readingCnt].current = voltsdiff;
   readingCnt++;
 
   if (readingCnt >= maximumReadings) {
@@ -282,11 +294,15 @@ void setup(void)
           Readings[i].hum = Readings[i+bufferShift].hum;
           Readings[i].time = Readings[i+bufferShift].time;
           Readings[i].volts = Readings[i+bufferShift].volts;
+          Readings[i].solarvolts = Readings[i+bufferShift].solarvolts;
+          Readings[i].current = Readings[i+bufferShift].current;
         }
           Readings[maximumReadings - bufferShift].temp = tempSHT;       // Units °C
           Readings[maximumReadings - bufferShift].hum = humSHT;
           Readings[maximumReadings - bufferShift].time = rtc.getEpoch(); 
           Readings[maximumReadings - bufferShift].volts = volts0;
+          Readings[maximumReadings - bufferShift].solarvolts = volts1;
+          Readings[maximumReadings - bufferShift].current = voltsdiff;
         readingCnt = (maximumReadings - bufferShift); 
         gotosleep();
       }
@@ -295,7 +311,7 @@ void setup(void)
         checkConnection();
         doPg();
         if ((pg_status == 2) && (i<maximumReadings)){
-          tosendstr = "insert into burst values (24,1," + String(Readings[i].time) + "," + String(Readings[i].temp,3) + "), (24,2," + String(Readings[i].time) + "," + String(Readings[i].volts,4) + "), (24,3," + String(Readings[i].time) + "," + String(Readings[i].hum,3) + ")";
+          tosendstr = "insert into burst values (24,1," + String(Readings[i].time) + "," + String(Readings[i].temp,3) + "), (24,2," + String(Readings[i].time) + "," + String(Readings[i].volts,4) + "), (24,3," + String(Readings[i].time) + "," + String(Readings[i].hum,3) + "), (24,4," + String(Readings[i].time) + "," + String(Readings[i].solarvolts,4) + "), (24,5," + String(Readings[i].time) + "," + String(Readings[i].current,3) + ")";
           conn.execute(tosendstr.c_str());
           pg_status = 3;
           delay(50);
