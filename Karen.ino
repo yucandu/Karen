@@ -11,13 +11,21 @@ float volts0, volts1, voltsdiff;
 #include <Preferences.h>
 Preferences prefs;
 
-#include "Adafruit_SHT31.h"
-
-Adafruit_SHT31 sht31 = Adafruit_SHT31();
+#include <Adafruit_BMP280.h>
+#include <Adafruit_AHTX0.h>
+Adafruit_AHTX0 aht;
+Adafruit_BMP280 bmp;
 
 RTC_DATA_ATTR int readingCnt = -1;
 RTC_DATA_ATTR int arrayCnt = 0;
 RTC_DATA_ATTR bool firstrun = true;
+
+void killwifi() {
+            WiFi.disconnect(); 
+         // WiFi.mode(WIFI_OFF);
+          //esp_wifi_stop();
+         // adc_power_off();
+}
 
 typedef struct {
   float temp;
@@ -26,6 +34,7 @@ typedef struct {
   float volts;
   float solarvolts;
   float current;
+  float pres;
 } sensorReadings;
 
 #define maximumReadings 120 // The maximum number of readings that can be stored in the available space
@@ -228,9 +237,10 @@ error:
 int i;
 
 void gotosleep() {
-      WiFi.disconnect();
+      //WiFi.disconnect();
       delay(1);
       esp_sleep_enable_timer_wakeup(sleeptimeSecs * 1000000);
+      delay(1);
       esp_deep_sleep_start();
       delay(1000);
 }
@@ -238,39 +248,23 @@ void gotosleep() {
 void transmitReadings() {
   i=0;
           while (i<maximumReadings) {
-          if (WiFi.status() == WL_CONNECTED) {
+
           doPg();
           if ((pg_status == 2) && (i<maximumReadings)){
-            tosendstr = "insert into burst values (24,1," + String(Readings[i].time) + "," + String(Readings[i].temp,3) + "), (24,2," + String(Readings[i].time) + "," + String(Readings[i].volts,4) + "), (24,3," + String(Readings[i].time) + "," + String(Readings[i].hum,3) + "), (24,4," + String(Readings[i].time) + "," + String(Readings[i].solarvolts,4) + "), (24,5," + String(Readings[i].time) + "," + String(Readings[i].current,3) + ")";
-            //tosendstr = "insert into burst values (24,1," + String(Readings[i].time) + "," + String(Readings[i].temp,3) + "), (24,2," + String(Readings[i].time) + "," + String(Readings[i].volts,4) + "), (24,3," + String(Readings[i].time) + "," + String(Readings[i].hum,3) + "), (24,4," + String(Readings[i].time) + "," + String(Readings[i].solarvolts,4) + ")";
+            tosendstr = "insert into burst values (24,1," + String(Readings[i].time) + "," + String(Readings[i].temp,3) + "), (24,2," + String(Readings[i].time) + "," + String(Readings[i].volts,4) + "), (24,3," + String(Readings[i].time) + "," + String(Readings[i].hum,3) + "), (24,4," + String(Readings[i].time) + "," + String(Readings[i].solarvolts,4) + "), (24,5," + String(Readings[i].time) + "," + String(Readings[i].current,3) + "), (24,6," + String(Readings[i].time) + "," + String(Readings[i].pres,3) + ")";
+            
             conn.execute(tosendstr.c_str());
             pg_status = 3;
             delay(50);
             i++;
           }
           delay(50);
-          }
+
         }
         
 }
 
-void transmitSavedReadings(sensorReadings savedReadings[maximumReadings]) {
-    i=0;
-          while (i<maximumReadings) {
-            if (WiFi.status() == WL_CONNECTED) {
-            doPg();
-            if ((pg_status == 2) && (i<maximumReadings)){
-              tosendstr = "insert into burst values (24,1," + String(Readings[i].time) + "," + String(Readings[i].temp,3) + "), (24,2," + String(Readings[i].time) + "," + String(Readings[i].volts,4) + "), (24,3," + String(Readings[i].time) + "," + String(Readings[i].hum,3) + "), (24,4," + String(Readings[i].time) + "," + String(Readings[i].solarvolts,4) + "), (24,5," + String(Readings[i].time) + "," + String(Readings[i].current,3) + ")";
-              conn.execute(tosendstr.c_str());
-              pg_status = 3;
-              delay(50);
-              i++;
-            }
-            delay(50);
-            }
-          }
-          conn.close();
-}
+
 
 void setup(void)
 {
@@ -280,6 +274,9 @@ void setup(void)
   ads.begin();
   ads.setGain(GAIN_ONE);    // 1x gain   +/- 4.096V  1 bit = 2mV      0.125mV
   if ((readingCnt == -1)) {
+      WiFi.setAutoReconnect(false);
+      WiFi.persistent(false);
+      WiFi.disconnect(false,true); 
       WiFi.begin((char *)ssid, pass);
       while ((WiFi.status() != WL_CONNECTED) && (millis() < WIFI_TIMEOUT)) {
         delay(10);
@@ -290,9 +287,10 @@ void setup(void)
           struct tm timeinfo;
           getLocalTime(&timeinfo);
           rtc.setTimeStruct(timeinfo);
-          WiFi.disconnect(); 
-      
-          readingCnt++;
+          killwifi();
+          readingCnt = 0;
+          delay(1);
+          readingCnt = 0;
           delay(1);
           esp_sleep_enable_timer_wakeup(1 * 1000000);
           esp_deep_sleep_start();
@@ -308,42 +306,51 @@ void setup(void)
   ads.setGain(GAIN_SIXTEEN);    // 16x gain  +/- 0.256V  1 bit = 0.125mV  0.0078125mV
   adc23diff = ads.readADC_Differential_2_3();
   voltsdiff = 1000.0*ads.computeVolts(adc23diff);
-  sht31.begin(0x44);
-  tempSHT = sht31.readTemperature();
-  humSHT = sht31.readHumidity();
+  bmp.begin();
+  bmp.setSampling(Adafruit_BMP280::MODE_FORCED,     /* Operating Mode. */
+                  Adafruit_BMP280::SAMPLING_X2,     /* Temp. oversampling */
+                  Adafruit_BMP280::SAMPLING_X16,    /* Pressure oversampling */
+                  Adafruit_BMP280::FILTER_X16,      /* Filtering. */
+                  Adafruit_BMP280::STANDBY_MS_500);
+  bmp.takeForcedMeasurement();
+  float presread = bmp.readPressure() / 100.0;
+  aht.begin();
+  sensors_event_t humidity, temp;
+  aht.getEvent(&humidity, &temp);
 
 
 
 
-
-  Readings[readingCnt].temp = tempSHT;  
-  Readings[readingCnt].hum = humSHT;     // Units °C
+  Readings[readingCnt].temp = temp.temperature;  
+  Readings[readingCnt].hum = humidity.relative_humidity;     // Units °C
   Readings[readingCnt].time = rtc.getEpoch(); 
   Readings[readingCnt].volts = volts0;
   Readings[readingCnt].solarvolts = volts1;
   Readings[readingCnt].current = voltsdiff;
-  readingCnt++;
+  Readings[readingCnt].pres = presread;
+  ++readingCnt;
+  delay(1);
 
   if (readingCnt >= maximumReadings) {
-
-      WiFi.begin((char *)ssid, pass);
       prefs.begin("stuff", false, "nvs2");
+      WiFi.setAutoReconnect(false);
+      WiFi.persistent(false);
+      WiFi.disconnect(false,true); 
+      WiFi.begin((char *)ssid, pass);
       while ((WiFi.status() != WL_CONNECTED) && (millis() < WIFI_TIMEOUT)) {
         delay(10);
       }
       if ((WiFi.status() != WL_CONNECTED) && (millis() >= WIFI_TIMEOUT)) {
-        WiFi.disconnect();
-        arrayCnt++;
-
+        delay(1);
+        ++arrayCnt;
+        delay(1);
         prefs.putBytes(String(arrayCnt).c_str(), &Readings, sizeof(Readings));
         readingCnt = 0;
+        killwifi();
         gotosleep();
       }
 
-      
-            delay(50);
-      
-            delay(50);
+
       transmitReadings();
       while (arrayCnt > 0) {
               delay(50);
@@ -353,10 +360,17 @@ void setup(void)
         //transmitSavedReadings(loadedReadings);
         transmitReadings();
       }
-      conn.close();
       arrayCnt = 0;
       readingCnt = -1;
-      gotosleep();
+      delay(1);
+      arrayCnt = 0;
+      readingCnt = -1;
+      delay(1);
+      conn.close();
+      killwifi();
+      esp_sleep_enable_timer_wakeup(1 * 1000000);
+      esp_deep_sleep_start();
+      delay(1000);
   } 
 
 
