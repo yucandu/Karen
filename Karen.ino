@@ -37,7 +37,7 @@ typedef struct {
   float pres;
 } sensorReadings;
 
-#define maximumReadings 120 // The maximum number of readings that can be stored in the available space
+#define maximumReadings 60 // The maximum number of readings that can be stored in the available space
 #define sleeptimeSecs   60 // Every 10-mins of sleep 10 x 60-secs
 #define WIFI_TIMEOUT 12000
 
@@ -47,7 +47,7 @@ const char* ntpServer = "pool.ntp.org";
 const long gmtOffset_sec = -18000;  //Replace with your GMT offset (secs)
 const int daylightOffset_sec = 3600;   //Replace with your daylight offset (secs)
 int hours, mins, secs;
-float tempC, tempSHT, humSHT;
+float tempC, tempSHT, humSHT, abshum;
 bool sent = false;
 
 IPAddress PGIP(192,168,50,197);        // your PostgreSQL server IP
@@ -277,6 +277,7 @@ void setup(void)
       WiFi.setAutoReconnect(false);
       WiFi.persistent(false);
       WiFi.disconnect(false,true); 
+      WiFi.mode(WIFI_STA);
       WiFi.begin((char *)ssid, pass);
       while ((WiFi.status() != WL_CONNECTED) && (millis() < WIFI_TIMEOUT)) {
         delay(10);
@@ -317,12 +318,12 @@ void setup(void)
   aht.begin();
   sensors_event_t humidity, temp;
   aht.getEvent(&humidity, &temp);
-
+  abshum = (6.112 * pow(2.71828, ((17.67 * temp.temperature)/(temp.temperature + 243.5))) * humidity.relative_humidity * 2.1674)/(273.15 + temp.temperature); //calculate absolute humidity
 
 
 
   Readings[readingCnt].temp = temp.temperature;  
-  Readings[readingCnt].hum = humidity.relative_humidity;     // Units °C
+  Readings[readingCnt].hum = abshum;     
   Readings[readingCnt].time = rtc.getEpoch(); 
   Readings[readingCnt].volts = volts0;
   Readings[readingCnt].solarvolts = volts1;
@@ -336,6 +337,7 @@ void setup(void)
       WiFi.setAutoReconnect(false);
       WiFi.persistent(false);
       WiFi.disconnect(false,true); 
+      WiFi.mode(WIFI_STA);
       WiFi.begin((char *)ssid, pass);
       while ((WiFi.status() != WL_CONNECTED) && (millis() < WIFI_TIMEOUT)) {
         delay(10);
