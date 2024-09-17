@@ -20,6 +20,7 @@ RTC_DATA_ATTR int readingCnt = -1;
 RTC_DATA_ATTR int arrayCnt = 0;
 RTC_DATA_ATTR bool firstrun = true;
 
+
 void killwifi() {
             WiFi.disconnect(); 
          // WiFi.mode(WIFI_OFF);
@@ -37,9 +38,9 @@ typedef struct {
   float pres;
 } sensorReadings;
 
-#define maximumReadings 60 // The maximum number of readings that can be stored in the available space
-#define sleeptimeSecs   60 // Every 10-mins of sleep 10 x 60-secs
-#define WIFI_TIMEOUT 12000
+#define maximumReadings 240 // The maximum number of readings that can be stored in the available space
+#define sleeptimeSecs   30 // Every 10-mins of sleep 10 x 60-secs
+#define WIFI_TIMEOUT 15000
 
 RTC_DATA_ATTR sensorReadings Readings[maximumReadings];
 
@@ -50,13 +51,13 @@ int hours, mins, secs;
 float tempC, tempSHT, humSHT, abshum;
 bool sent = false;
 
-IPAddress PGIP(192,168,50,197);        // your PostgreSQL server IP
+IPAddress PGIP(216,110,224,105);        // your PostgreSQL server IP
 
 const char ssid[] = "mikesnet";      //  your network SSID (name)
 const char pass[] = "springchicken";      // your network password
 
-const char user[] = "test";       // your database user
-const char password[] = "test";   // your database password
+const char user[] = "wanburst";       // your database user
+const char password[] = "elec&9";   // your database password
 const char dbname[] = "blynk_reporting";         // your database name
 
 
@@ -239,7 +240,7 @@ int i;
 void gotosleep() {
       //WiFi.disconnect();
       delay(1);
-      esp_sleep_enable_timer_wakeup(sleeptimeSecs * 1000000);
+      esp_sleep_enable_timer_wakeup(sleeptimeSecs * 1000000ULL);
       delay(1);
       esp_deep_sleep_start();
       delay(1000);
@@ -255,10 +256,10 @@ void transmitReadings() {
             
             conn.execute(tosendstr.c_str());
             pg_status = 3;
-            delay(50);
+            delay(10);
             i++;
           }
-          delay(50);
+          delay(10);
 
         }
         
