@@ -318,9 +318,7 @@ void setup(void)
   //setCpuFrequencyMhz(80);
    // 1x gain   +/- 4.096V  1 bit = 2mV      0.125mV
  
-  Wire.begin();
-  adc.init();
-  adc.setVoltageRange_mV(ADS1115_RANGE_4096);
+
   display.begin(26, 7);
 
 
@@ -335,7 +333,7 @@ void setup(void)
     
       WiFi.mode(WIFI_STA);
       WiFi.begin((char *)ssid, pass);
-      WiFi.setTxPower(WIFI_POWER_8_5dBm);
+      //WiFi.setTxPower(WIFI_POWER_8_5dBm);
       display.print("Connecting to get time...");
       display.display();
       while ((WiFi.status() != WL_CONNECTED) && (millis() < WIFI_TIMEOUT)) {
@@ -369,7 +367,9 @@ void setup(void)
           delay(1000);
   }
 
-
+  Wire.begin();
+  adc.init();
+  adc.setVoltageRange_mV(ADS1115_RANGE_4096);
 
   float volts0 = 2.0 * readChannel(ADS1115_COMP_3_GND);
 
@@ -438,7 +438,7 @@ void setup(void)
       //WiFi.disconnect(false,true); 
       WiFi.mode(WIFI_STA);
       WiFi.begin((char *)ssid, pass);
-      WiFi.setTxPower(WIFI_POWER_8_5dBm);
+      //WiFi.setTxPower(WIFI_POWER_8_5dBm);
       display.clearDisplay();   // clears the screen and buffer
       display.setCursor(0,0);
       display.print("Connecting to transmit...");
