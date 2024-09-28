@@ -1,46 +1,63 @@
+#include "esp_wifi.h"
+#include "driver/adc.h"
+
+
 #include <WiFi.h>
 #include "nvs_flash.h"
 #include <SimplePgSQL.h>
 #include "time.h"
 #include <ESP32Time.h>
-ESP32Time rtc(0);  // offset in seconds, use 0 because NTP already offset
-#include <Adafruit_ADS1X15.h>
-Adafruit_ADS1115 ads;
-int16_t adc0, adc1, adc23diff;
-float volts0, volts1, voltsdiff;
-#include <Preferences.h>
-Preferences prefs;
+#include "SPI.h"
+//#include <TFT_eSPI.h> 
 
 #include <Adafruit_BMP280.h>
 #include <Adafruit_AHTX0.h>
+
+#include <Adafruit_GFX.h>
+#include <Adafruit_PCD8544.h>
+#include <ADS1115_WE.h> 
+#include <Wire.h>
+#define I2C_ADDRESS 0x48
+
+ADS1115_WE adc = ADS1115_WE(I2C_ADDRESS);
+
+ Adafruit_PCD8544 display = Adafruit_PCD8544(0, 1, 2);
+
+
 Adafruit_AHTX0 aht;
 Adafruit_BMP280 bmp;
 
+ESP32Time rtc(-14400);  // offset in seconds, use 0 because NTP already offset
+
+int16_t adc0, adc1, adc2, adc3;
+float volts0, volts1, volts2, volts3;
+float abshum;
+
+//TFT_eSPI tft = TFT_eSPI(); 
+
+#include <Preferences.h>
+Preferences prefs;
+
+//#include "Adafruit_SHT31.h"
+
+//Adafruit_SHT31 sht31 = Adafruit_SHT31();
+
 RTC_DATA_ATTR int readingCnt = -1;
 RTC_DATA_ATTR int arrayCnt = 0;
-RTC_DATA_ATTR bool firstrun = true;
 
-
-void killwifi() {
-            WiFi.disconnect(); 
-         // WiFi.mode(WIFI_OFF);
-          //esp_wifi_stop();
-         // adc_power_off();
-}
+int i;
 
 typedef struct {
-  float temp;
-  float hum;
+  float temp1;
+  float temp2;
   unsigned long   time;
   float volts;
-  float solarvolts;
-  float current;
   float pres;
 } sensorReadings;
 
-#define maximumReadings 240 // The maximum number of readings that can be stored in the available space
-#define sleeptimeSecs   30 // Every 10-mins of sleep 10 x 60-secs
-#define WIFI_TIMEOUT 15000
+#define maximumReadings 360 // The maximum number of readings that can be stored in the available space
+#define sleeptimeSecs   30 
+#define WIFI_TIMEOUT 20000
 
 RTC_DATA_ATTR sensorReadings Readings[maximumReadings];
 
@@ -48,10 +65,11 @@ const char* ntpServer = "pool.ntp.org";
 const long gmtOffset_sec = -18000;  //Replace with your GMT offset (secs)
 const int daylightOffset_sec = 3600;   //Replace with your daylight offset (secs)
 int hours, mins, secs;
-float tempC, tempSHT, humSHT, abshum;
+float tempC;
 bool sent = false;
 
-IPAddress PGIP(216,110,224,105);        // your PostgreSQL server IP
+//IPAddress PGIP(192,168,50,197);        // your PostgreSQL server IP 
+IPAddress PGIP(216,110,224,105);
 
 const char ssid[] = "mikesnet";      //  your network SSID (name)
 const char pass[] = "springchicken";      // your network password
@@ -192,7 +210,6 @@ void doPg(void)
     }
     if (pg_status == 3) {
         rc=conn.getData();
-        int i;
         if (rc < 0) goto error;
         if (!rc) return;
         if (rc & PG_RSTAT_HAVE_COLUMNS) {
@@ -235,7 +252,7 @@ error:
     }
 }
 
-int i;
+
 
 void gotosleep() {
       //WiFi.disconnect();
@@ -246,44 +263,96 @@ void gotosleep() {
       delay(1000);
 }
 
+void gotosleepfast() {
+      //WiFi.disconnect();
+          esp_sleep_enable_timer_wakeup(1 * 1000000);
+          esp_deep_sleep_start();
+          delay(1000);
+}
+
+void killwifi() {
+            WiFi.disconnect(); 
+         // WiFi.mode(WIFI_OFF);
+          //esp_wifi_stop();
+         // adc_power_off();
+}
+
 void transmitReadings() {
   i=0;
           while (i<maximumReadings) {
+            //if (WiFi.status() == WL_CONNECTED) {
+            doPg();
+            display.clearDisplay();   // clears the screen and buffer
+            display.setCursor(0,0);
+            display.print("TXing #");
+            display.print(i);
+            display.print(",");
+            display.println(arrayCnt);
+            display.display();
 
-          doPg();
-          if ((pg_status == 2) && (i<maximumReadings)){
-            tosendstr = "insert into burst values (24,1," + String(Readings[i].time) + "," + String(Readings[i].temp,3) + "), (24,2," + String(Readings[i].time) + "," + String(Readings[i].volts,4) + "), (24,3," + String(Readings[i].time) + "," + String(Readings[i].hum,3) + "), (24,4," + String(Readings[i].time) + "," + String(Readings[i].solarvolts,4) + "), (24,5," + String(Readings[i].time) + "," + String(Readings[i].current,3) + "), (24,6," + String(Readings[i].time) + "," + String(Readings[i].pres,3) + ")";
-            
-            conn.execute(tosendstr.c_str());
-            pg_status = 3;
+            if ((pg_status == 2) && (i<maximumReadings)){
+              tosendstr = "insert into burst values (24,1," + String(Readings[i].time) + "," + String(Readings[i].temp1,3) + "), (24,2," + String(Readings[i].time) + "," + String(Readings[i].volts,4) + "), (24,3," + String(Readings[i].time) + "," + String(Readings[i].temp2,3) + "), (24,6," + String(Readings[i].time) + "," + String(Readings[i].pres,3) + ")";
+              conn.execute(tosendstr.c_str());
+              pg_status = 3;
+              delay(10);
+              i++;
+            }
             delay(10);
-            i++;
+            
           }
-          delay(10);
-
-        }
-        
+          
 }
 
 
+float readChannel(ADS1115_MUX channel) {
+  float voltage = 0.0;
+  adc.setCompareChannels(channel);
+  adc.startSingleMeasurement();
+  while(adc.isBusy()){}
+  voltage = adc.getResult_V(); // alternative: getResult_mV for Millivolt
+  return voltage;
+}
 
 void setup(void)
 {
-  //setCpuFrequencyMhz(80);  //faster code, better battery if we don't use this when using deepsleep
+  //setCpuFrequencyMhz(80);
+   // 1x gain   +/- 4.096V  1 bit = 2mV      0.125mV
+ 
+  Wire.begin();
+  adc.init();
+  adc.setVoltageRange_mV(ADS1115_RANGE_4096);
+  display.begin(26, 7);
 
 
-  ads.begin();
-  ads.setGain(GAIN_ONE);    // 1x gain   +/- 4.096V  1 bit = 2mV      0.125mV
+  display.display(); // show splashscreen
+  //delay(1000);
+  display.clearDisplay();   // clears the screen and buffer
+  display.setTextSize(1);
+  display.setTextColor(BLACK);
+  display.setCursor(0,0);
+  display.setTextWrap(true);
   if ((readingCnt == -1)) {
-      WiFi.setAutoReconnect(false);
-      WiFi.persistent(false);
-      WiFi.disconnect(false,true); 
+    
       WiFi.mode(WIFI_STA);
       WiFi.begin((char *)ssid, pass);
+      WiFi.setTxPower(WIFI_POWER_8_5dBm);
+      display.print("Connecting to get time...");
+      display.display();
       while ((WiFi.status() != WL_CONNECTED) && (millis() < WIFI_TIMEOUT)) {
-        delay(10);
+        delay(250);
+        display.print(".");
+        display.display();
       }
-
+          display.clearDisplay();   // clears the screen and buffer
+          display.setCursor(0,0);
+          if (WiFi.status() == WL_CONNECTED) {
+            display.print("Connected. Getting time...");
+          }
+          else
+          {
+            display.print("Connection timed out. :(");
+          }
+          display.display();
           configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
           
           struct tm timeinfo;
@@ -294,20 +363,17 @@ void setup(void)
           delay(1);
           readingCnt = 0;
           delay(1);
+
           esp_sleep_enable_timer_wakeup(1 * 1000000);
           esp_deep_sleep_start();
           delay(1000);
-
   }
-  
-  adc0 = ads.readADC_SingleEnded(0);
-  adc1 = ads.readADC_SingleEnded(1);
-  volts0 = ads.computeVolts(adc0)*2.0;
-  volts1 = ads.computeVolts(adc1)*2.0;
-  
-  ads.setGain(GAIN_SIXTEEN);    // 16x gain  +/- 0.256V  1 bit = 0.125mV  0.0078125mV
-  adc23diff = ads.readADC_Differential_2_3();
-  voltsdiff = 1000.0*ads.computeVolts(adc23diff);
+
+
+
+  float volts0 = 2.0 * readChannel(ADS1115_COMP_3_GND);
+
+
   bmp.begin();
   bmp.setSampling(Adafruit_BMP280::MODE_FORCED,     /* Operating Mode. */
                   Adafruit_BMP280::SAMPLING_X2,     /* Temp. oversampling */
@@ -320,47 +386,96 @@ void setup(void)
   sensors_event_t humidity, temp;
   aht.getEvent(&humidity, &temp);
   abshum = (6.112 * pow(2.71828, ((17.67 * temp.temperature)/(temp.temperature + 243.5))) * humidity.relative_humidity * 2.1674)/(273.15 + temp.temperature); //calculate absolute humidity
+  display.print("Time: ");
+  display.print(rtc.getHour());
+  if (rtc.getMinute() < 10) {display.print(":0");}
+  else {display.print(":");}
+  
+  display.print(rtc.getMinute());
+  display.println(rtc.getAmPm());
 
+  display.print(temp.temperature, 2);
+  display.print("C ");
+  display.print(humidity.relative_humidity, 1);
+  display.println("%");
 
+  display.print("Abs: ");
+  display.print(abshum, 2);
+  display.println("g");
 
-  Readings[readingCnt].temp = temp.temperature;  
-  Readings[readingCnt].hum = abshum;     
-  Readings[readingCnt].time = rtc.getEpoch(); 
+  display.print("Batt: ");
+  display.print(volts0, 4);
+  display.println("v");
+
+  display.print("Pres: ");
+  display.print(presread, 2);
+  display.println("m");
+
+  display.print("R");
+  display.print(readingCnt); 
+  display.print("/");
+  display.print(maximumReadings); 
+  display.print(" A");
+  display.print(arrayCnt);
+  display.display();
+
+  Readings[readingCnt].temp1 = temp.temperature;    // Units °C
+  Readings[readingCnt].temp2 = abshum; //humidity is temp2
+  Readings[readingCnt].time = rtc.getLocalEpoch(); 
   Readings[readingCnt].volts = volts0;
-  Readings[readingCnt].solarvolts = volts1;
-  Readings[readingCnt].current = voltsdiff;
   Readings[readingCnt].pres = presread;
-  ++readingCnt;
+
+
+
+  ++readingCnt; 
   delay(1);
 
   if (readingCnt >= maximumReadings) {
+
       prefs.begin("stuff", false, "nvs2");
-      WiFi.setAutoReconnect(false);
-      WiFi.persistent(false);
-      WiFi.disconnect(false,true); 
+      //WiFi.setAutoReconnect(false);
+      //WiFi.persistent(false);
+      //WiFi.disconnect(false,true); 
       WiFi.mode(WIFI_STA);
       WiFi.begin((char *)ssid, pass);
+      WiFi.setTxPower(WIFI_POWER_8_5dBm);
+      display.clearDisplay();   // clears the screen and buffer
+      display.setCursor(0,0);
+      display.print("Connecting to transmit...");
+      display.display();
       while ((WiFi.status() != WL_CONNECTED) && (millis() < WIFI_TIMEOUT)) {
-        delay(10);
+        delay(250);
+        display.print(".");
+        display.display();
       }
+
+
       if ((WiFi.status() != WL_CONNECTED) && (millis() >= WIFI_TIMEOUT)) {
+
         delay(1);
         ++arrayCnt;
         delay(1);
         prefs.putBytes(String(arrayCnt).c_str(), &Readings, sizeof(Readings));
         readingCnt = 0;
         killwifi();
-        gotosleep();
+        esp_sleep_enable_timer_wakeup(1 * 1000000);
+        esp_deep_sleep_start();
+        delay(1000);
       }
-
-
+      display.clearDisplay();   // clears the screen and buffer
+      display.setCursor(0,0);
+      display.print("Connected. Transmitting #0");
+      display.display();
       transmitReadings();
       while (arrayCnt > 0) {
-              delay(50);
-        //sensorReadings loadedReadings[maximumReadings];
+        display.clearDisplay();   // clears the screen and buffer
+        display.setCursor(0,0);
+        display.print("Transmitting #");
+        display.print(arrayCnt);
+        display.display();
+        delay(50);
         prefs.getBytes(String(arrayCnt).c_str(), &Readings, sizeof(Readings));
         arrayCnt--;
-        //transmitSavedReadings(loadedReadings);
         transmitReadings();
       }
       arrayCnt = 0;
@@ -369,22 +484,24 @@ void setup(void)
       arrayCnt = 0;
       readingCnt = -1;
       delay(1);
+      display.clearDisplay();   // clears the screen and buffer
+      display.setCursor(0,0);
+      display.print("Done.  Closing connection...");
+      display.display();
       conn.close();
+
       killwifi();
-      esp_sleep_enable_timer_wakeup(1 * 1000000);
-      esp_deep_sleep_start();
-      delay(1000);
+
+      ESP.restart();
   } 
 
 
         gotosleep();
-
 
 }
 
 
 void loop()
 {
-
-     gotosleep();
+gotosleep();
 }
