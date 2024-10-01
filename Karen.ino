@@ -319,7 +319,7 @@ void setup(void)
    // 1x gain   +/- 4.096V  1 bit = 2mV      0.125mV
  
 
-  display.begin(26, 7);
+  display.begin(23, 7);
 
 
   display.display(); // show splashscreen
