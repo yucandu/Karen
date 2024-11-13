@@ -17,7 +17,7 @@
 #include <ADS1115_WE.h> 
 #include <Wire.h>
 #define I2C_ADDRESS 0x48
-
+bool isSetNtp = false;     
 ADS1115_WE adc = ADS1115_WE(I2C_ADDRESS);
 
  Adafruit_PCD8544 display = Adafruit_PCD8544(0, 1, 2);
@@ -56,7 +56,7 @@ typedef struct {
 #define maximumReadings 360 // The maximum number of readings that can be stored in the available space
 #define sleeptimeSecs   30 
 #define WIFI_TIMEOUT 20000
-
+#define TIME_TIMEOUT 20000
 RTC_DATA_ATTR sensorReadings Readings[maximumReadings];
 
 const char* ntpServer = "pool.ntp.org";
