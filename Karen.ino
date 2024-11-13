@@ -6,7 +6,6 @@
 #include "nvs_flash.h"
 #include <SimplePgSQL.h>
 #include "time.h"
-#include <ESP32Time.h>
 #include "SPI.h"
 //#include <TFT_eSPI.h> 
 
@@ -27,7 +26,6 @@ ADS1115_WE adc = ADS1115_WE(I2C_ADDRESS);
 Adafruit_AHTX0 aht;
 Adafruit_BMP280 bmp;
 
-ESP32Time rtc(-14400);  // offset in seconds, use 0 because NTP already offset
 
 int16_t adc0, adc1, adc2, adc3;
 float volts0, volts1, volts2, volts3;
@@ -37,7 +35,7 @@ float abshum;
 
 #include <Preferences.h>
 Preferences prefs;
-
+  struct tm timeinfo;
 //#include "Adafruit_SHT31.h"
 
 //Adafruit_SHT31 sht31 = Adafruit_SHT31();
@@ -313,13 +311,24 @@ float readChannel(ADS1115_MUX channel) {
   return voltage;
 }
 
+void initTime(String timezone){
+  configTzTime(timezone.c_str(), "time.cloudflare.com", "pool.ntp.org", "time.nist.gov");
+
+  while ((!isSetNtp) && (millis() < TIME_TIMEOUT)) {
+        delay(250);
+        display.print(".");
+        display.display();
+        }
+
+}
+
 void setup(void)
 {
   //setCpuFrequencyMhz(80);
    // 1x gain   +/- 4.096V  1 bit = 2mV      0.125mV
  
 
-  display.begin(23, 7);
+  display.begin(20, 7);
 
 
   display.display(); // show splashscreen
@@ -330,10 +339,9 @@ void setup(void)
   display.setCursor(0,0);
   display.setTextWrap(true);
   if ((readingCnt == -1)) {
-    
+
       WiFi.mode(WIFI_STA);
       WiFi.begin((char *)ssid, pass);
-      //WiFi.setTxPower(WIFI_POWER_8_5dBm);
       display.print("Connecting to get time...");
       display.display();
       while ((WiFi.status() != WL_CONNECTED) && (millis() < WIFI_TIMEOUT)) {
@@ -351,11 +359,8 @@ void setup(void)
             display.print("Connection timed out. :(");
           }
           display.display();
-          configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-          
-          struct tm timeinfo;
-          getLocalTime(&timeinfo);
-          rtc.setTimeStruct(timeinfo);
+          initTime("EST5EDT,M3.2.0,M11.1.0");
+          //rtc.setTimeStruct(timeinfo);
           killwifi();
           readingCnt = 0;
           delay(1);
@@ -387,13 +392,23 @@ void setup(void)
   aht.getEvent(&humidity, &temp);
   abshum = (6.112 * pow(2.71828, ((17.67 * temp.temperature)/(temp.temperature + 243.5))) * humidity.relative_humidity * 2.1674)/(273.15 + temp.temperature); //calculate absolute humidity
   display.print("Time: ");
-  display.print(rtc.getHour());
-  if (rtc.getMinute() < 10) {display.print(":0");}
+  setenv("TZ","EST5EDT,M3.2.0,M11.1.0",1);  //  Now adjust the TZ.  Clock settings are adjusted to show the new local time
+  tzset();
+  getLocalTime(&timeinfo);
+  int hr12 = timeinfo.tm_hour;
+  String AMPM;
+  if (hr12 > 12) {
+    hr12 -= 12;
+    AMPM = "PM";
+  }
+  else {AMPM = "AM";}
+
+  display.print(hr12);
+  if (timeinfo.tm_min < 10) {display.print(":0");}
   else {display.print(":");}
   
-  display.print(rtc.getMinute());
-  display.println(rtc.getAmPm());
-
+  display.print(timeinfo.tm_min);
+  display.println(AMPM);
   display.print(temp.temperature, 2);
   display.print("C ");
   display.print(humidity.relative_humidity, 1);
@@ -421,7 +436,7 @@ void setup(void)
 
   Readings[readingCnt].temp1 = temp.temperature;    // Units °C
   Readings[readingCnt].temp2 = abshum; //humidity is temp2
-  Readings[readingCnt].time = rtc.getLocalEpoch(); 
+  Readings[readingCnt].time = mktime(&timeinfo); 
   Readings[readingCnt].volts = volts0;
   Readings[readingCnt].pres = presread;
 
