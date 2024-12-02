@@ -402,6 +402,9 @@ void setup(void)
     AMPM = "PM";
   }
   else {AMPM = "AM";}
+  if (hours == 12) {AMPM = "PM";}
+  if (hours == 0) {hours = 12;}
+
 
   display.print(hr12);
   if (timeinfo.tm_min < 10) {display.print(":0");}
