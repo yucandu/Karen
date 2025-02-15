@@ -67,7 +67,7 @@ float tempC;
 bool sent = false;
 
 //IPAddress PGIP(192,168,50,197);        // your PostgreSQL server IP 
-IPAddress PGIP(216,110,224,105);
+IPAddress PGIP(xxx,xxx,xxx,xxx);
 
 const char ssid[] = "mikesnet";      //  your network SSID (name)
 const char pass[] = "springchicken";      // your network password
