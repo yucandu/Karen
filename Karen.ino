@@ -46,11 +46,8 @@ RTC_DATA_ATTR int arrayCnt = 0;
 int i;
 
 typedef struct {
-  float temp1;
-  float temp2;
+  float outtemp;
   unsigned long   time;
-  float volts;
-  float pres;
 } sensorReadings;
 
 #define maximumReadings 360 // The maximum number of readings that can be stored in the available space
@@ -67,7 +64,7 @@ float tempC;
 bool sent = false;
 
 //IPAddress PGIP(192,168,50,197);        // your PostgreSQL server IP 
-IPAddress PGIP(xxx,xxx,xxx,xxx);
+IPAddress PGIP(x,x,x,x);
 
 const char ssid[] = "mikesnet";      //  your network SSID (name)
 const char pass[] = "springchicken";      // your network password
@@ -311,6 +308,12 @@ float readChannel(ADS1115_MUX channel) {
   return voltage;
 }
 
+#include "esp_sntp.h"
+void cbSyncTime(struct timeval *tv) { // callback function to show when NTP was synchronized
+  Serial.println("NTP time synched");
+  isSetNtp = true;
+}
+
 void initTime(String timezone){
   configTzTime(timezone.c_str(), "time.cloudflare.com", "pool.ntp.org", "time.nist.gov");
 
@@ -397,12 +400,12 @@ void setup(void)
   getLocalTime(&timeinfo);
   int hr12 = timeinfo.tm_hour;
   String AMPM;
-  if (hr12 > 12) {
+  if (hr12 >= 12) {
     hr12 -= 12;
     AMPM = "PM";
   }
   else {AMPM = "AM";}
-  if (hours == 12) {AMPM = "PM";}
+  //if (hours == 12) {AMPM = "PM";}
   if (hours == 0) {hours = 12;}
 
 
