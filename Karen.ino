@@ -59,9 +59,7 @@ typedef struct {
 #define TIME_TIMEOUT 20000
 RTC_DATA_ATTR sensorReadings Readings[maximumReadings];
 
-const char* ntpServer = "pool.ntp.org";
-const long gmtOffset_sec = -18000;  //Replace with your GMT offset (secs)
-const int daylightOffset_sec = 3600;   //Replace with your daylight offset (secs)
+
 int hours, mins, secs;
 float tempC;
 bool sent = false;
@@ -69,12 +67,12 @@ bool sent = false;
 //IPAddress PGIP(192,168,50,197);        // your PostgreSQL server IP 
 IPAddress PGIP(x,x,x,x);
 
-const char ssid[] = "x";      //  your network SSID (name)
-const char pass[] = "x";      // your network password
+const char ssid[] = "mikesnet";      //  your network SSID (name)
+const char pass[] = "springchicken";      // your network password
 
-const char user[] = "x";       // your database user
-const char password[] = "x";   // your database password
-const char dbname[] = "x";         // your database name
+const char user[] = "wanburst";       // your database user
+const char password[] = "elec&9";   // your database password
+const char dbname[] = "blynk_reporting";         // your database name
 
 
 int WiFiStatus;
@@ -318,7 +316,7 @@ void cbSyncTime(struct timeval *tv) { // callback function to show when NTP was 
 }
 
 void initTime(String timezone){
-  configTzTime(timezone.c_str(), "time.cloudflare.com", "pool.ntp.org", "time.nist.gov");
+  configTzTime(timezone.c_str(), "192.168.50.197");
 
   while ((!isSetNtp) && (millis() < TIME_TIMEOUT)) {
         delay(250);
@@ -330,6 +328,7 @@ void initTime(String timezone){
 
 void setup(void)
 {
+  sntp_set_time_sync_notification_cb(cbSyncTime);
   //setCpuFrequencyMhz(80);
    // 1x gain   +/- 4.096V  1 bit = 2mV      0.125mV
  
@@ -348,6 +347,7 @@ void setup(void)
 
       WiFi.mode(WIFI_STA);
       WiFi.begin((char *)ssid, pass);
+      WiFi.setTxPower(WIFI_POWER_8_5dBm);
       display.print("Connecting to get time...");
       display.display();
       while ((WiFi.status() != WL_CONNECTED) && (millis() < WIFI_TIMEOUT)) {
@@ -462,7 +462,7 @@ void setup(void)
       //WiFi.disconnect(false,true); 
       WiFi.mode(WIFI_STA);
       WiFi.begin((char *)ssid, pass);
-      //WiFi.setTxPower(WIFI_POWER_8_5dBm);
+      WiFi.setTxPower(WIFI_POWER_8_5dBm);
       display.clearDisplay();   // clears the screen and buffer
       display.setCursor(0,0);
       display.print("Connecting to transmit...");
