@@ -1,10 +1,10 @@
 #include "esp_wifi.h"
-#include "driver/adc.h"
-
+//#include "driver/adc.h"
+#include <esp_now.h>
 
 #include <WiFi.h>
 #include "nvs_flash.h"
-#include <SimplePgSQL.h>
+//#include <SimplePgSQL.h>
 #include "time.h"
 #include "SPI.h"
 //#include <TFT_eSPI.h> 
@@ -58,196 +58,98 @@ typedef struct {
 #define WIFI_TIMEOUT 20000
 #define TIME_TIMEOUT 20000
 RTC_DATA_ATTR sensorReadings Readings[maximumReadings];
-
+RTC_DATA_ATTR bool hasTimeBeenSet = false;
 
 int hours, mins, secs;
 float tempC;
 bool sent = false;
 
 //IPAddress PGIP(192,168,50,197);        // your PostgreSQL server IP 
-IPAddress PGIP(x,x,x,x);
-
-const char ssid[] = "mikesnet";      //  your network SSID (name)
-const char pass[] = "springchicken";      // your network password
-
-const char user[] = "wanburst";       // your database user
-const char password[] = "elec&9";   // your database password
-const char dbname[] = "blynk_reporting";         // your database name
 
 
-int WiFiStatus;
-WiFiClient client;
 
 
-char buffer[1024];
-PGconnection conn(&client, 0, 1024, buffer);
 
-char tosend[192];
-String tosendstr;
+uint8_t relayMAC[] = {0xC0, 0x49, 0xEF, 0x93, 0xA9, 0xFC}; // MAC address of the relay device
 
+bool gotAck = false;
+bool awaitingAck = false;
 
-#ifndef USE_ARDUINO_ETHERNET
-void checkConnection()
-{
-    int status = WiFi.status();
-    if (status != WL_CONNECTED) {
-        if (WiFiStatus == WL_CONNECTED) {
-            Serial.println("Connection lost");
-            WiFiStatus = status;
-        }
-    }
-    else {
-        if (WiFiStatus != WL_CONNECTED) {
-            Serial.println("Connected");
-            WiFiStatus = status;
-        }
-    }
-}
-
-#endif
-
-static PROGMEM const char query_rel[] = "\
-SELECT a.attname \"Column\",\
-  pg_catalog.format_type(a.atttypid, a.atttypmod) \"Type\",\
-  case when a.attnotnull then 'not null ' else 'null' end as \"null\",\
-  (SELECT substring(pg_catalog.pg_get_expr(d.adbin, d.adrelid) for 128)\
-   FROM pg_catalog.pg_attrdef d\
-   WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum AND a.atthasdef) \"Extras\"\
- FROM pg_catalog.pg_attribute a, pg_catalog.pg_class c\
- WHERE a.attrelid = c.oid AND c.relkind = 'r' AND\
- c.relname = %s AND\
- pg_catalog.pg_table_is_visible(c.oid)\
- AND a.attnum > 0 AND NOT a.attisdropped\
-    ORDER BY a.attnum";
-
-static PROGMEM const char query_tables[] = "\
-SELECT n.nspname as \"Schema\",\
-  c.relname as \"Name\",\
-  CASE c.relkind WHEN 'r' THEN 'table' WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized view' WHEN 'i' THEN 'index' WHEN 'S' THEN 'sequence' WHEN 's' THEN 'special' WHEN 'f' THEN 'foreign table' END as \"Type\",\
-  pg_catalog.pg_get_userbyid(c.relowner) as \"Owner\"\
- FROM pg_catalog.pg_class c\
-     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace\
- WHERE c.relkind IN ('r','v','m','S','f','')\
-      AND n.nspname <> 'pg_catalog'\
-      AND n.nspname <> 'information_schema'\
-      AND n.nspname !~ '^pg_toast'\
-  AND pg_catalog.pg_table_is_visible(c.oid)\
- ORDER BY 1,2";
-
-int pg_status = 0;
-
-void doPg(void)
-{
-    char *msg;
-    int rc;
-    if (!pg_status) {
-        conn.setDbLogin(PGIP,
-            user,
-            password,
-            dbname,
-            "utf8");
-        pg_status = 1;
-        return;
-    }
-
-    if (pg_status == 1) {
-        rc = conn.status();
-        if (rc == CONNECTION_BAD || rc == CONNECTION_NEEDED) {
-            char *c=conn.getMessage();
-            if (c) Serial.println(c);
-            pg_status = -1;
-        }
-        else if (rc == CONNECTION_OK) {
-            pg_status = 2;
-            Serial.println("Enter query");
-        }
-        return;
-    }
-    if (pg_status == 2) {
-        if (!Serial.available()) return;
-        char inbuf[192];
-        int n = Serial.readBytesUntil('\n',inbuf,191);
-        while (n > 0) {
-            if (isspace(inbuf[n-1])) n--;
-            else break;
-        }
-        inbuf[n] = 0;
-
-        if (!strcmp(inbuf,"\\d")) {
-            if (conn.execute(query_tables, true)) goto error;
-            Serial.println("Working...");
-            pg_status = 3;
-            return;
-        }
-        if (!strncmp(inbuf,"\\d",2) && isspace(inbuf[2])) {
-            char *c=inbuf+3;
-            while (*c && isspace(*c)) c++;
-            if (!*c) {
-                if (conn.execute(query_tables, true)) goto error;
-                Serial.println("Working...");
-                pg_status = 3;
-                return;
-            }
-            if (conn.executeFormat(true, query_rel, c)) goto error;
-            Serial.println("Working...");
-            pg_status = 3;
-            return;
-        }
-
-        if (!strncmp(inbuf,"exit",4)) {
-            conn.close();
-            Serial.println("Thank you");
-            pg_status = -1;
-            return;
-        }
-        if (conn.execute(inbuf)) goto error;
-        Serial.println("Working...");
-        pg_status = 3;
-    }
-    if (pg_status == 3) {
-        rc=conn.getData();
-        if (rc < 0) goto error;
-        if (!rc) return;
-        if (rc & PG_RSTAT_HAVE_COLUMNS) {
-            for (i=0; i < conn.nfields(); i++) {
-                if (i) Serial.print(" | ");
-                Serial.print(conn.getColumn(i));
-            }
-            Serial.println("\n==========");
-        }
-        else if (rc & PG_RSTAT_HAVE_ROW) {
-            for (i=0; i < conn.nfields(); i++) {
-                if (i) Serial.print(" | ");
-                msg = conn.getValue(i);
-                if (!msg) msg=(char *)"NULL";
-                Serial.print(msg);
-            }
-            Serial.println();
-        }
-        else if (rc & PG_RSTAT_HAVE_SUMMARY) {
-            Serial.print("Rows affected: ");
-            Serial.println(conn.ntuples());
-        }
-        else if (rc & PG_RSTAT_HAVE_MESSAGE) {
-            msg = conn.getMessage();
-            if (msg) Serial.println(msg);
-        }
-        if (rc & PG_RSTAT_READY) {
-            pg_status = 2;
-            Serial.println("Enter query");
-        }
-    }
+void initESPNOW() {
+  // Initialize ESP-NOW
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("ESP-NOW init failed");
     return;
-error:
-    msg = conn.getMessage();
-    if (msg) Serial.println(msg);
-    else Serial.println("UNKNOWN ERROR");
-    if (conn.status() == CONNECTION_BAD) {
-        Serial.println("Connection is bad");
-        pg_status = -1;
-    }
+  }
+  esp_now_register_recv_cb(OnDataRecv);
+
+  // Register peer (relay MAC must be known ahead of time)
+  esp_now_peer_info_t peerInfo = {};
+  memcpy(peerInfo.peer_addr, relayMAC, 6);
+  peerInfo.channel = 0;
+  peerInfo.encrypt = false;
+  esp_now_add_peer(&peerInfo);
 }
 
+// Handshake response callback
+void OnDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *incomingData, int len) {
+  Serial.print("Received something! Length: ");
+  Serial.println(len);
+  for (int i = 0; i < len; i++) {
+    Serial.print(incomingData[i], HEX);
+    Serial.print(" ");
+  }
+  Serial.println();
+
+  if (len == sizeof(uint32_t)) {
+    uint32_t localTimeUnix;
+    memcpy(&localTimeUnix, incomingData, sizeof(localTimeUnix));
+
+    struct timeval now = {
+      .tv_sec = localTimeUnix,
+      .tv_usec = 0
+    };
+    settimeofday(&now, nullptr);
+
+    Serial.print("Time set from relay: ");
+    Serial.println(localTimeUnix);
+
+    hasTimeBeenSet = true;
+  }
+  if (len == 3 && memcmp(incomingData, "ACK", 3) == 0) {
+    gotAck = true;
+    Serial.println("Received ACK from relay!");
+    return;
+  }
+}
+
+// Send data over ESP-NOW
+bool sendData(sensorReadings* data, int count) {
+  for (int i = 0; i < count; i++) {
+    esp_err_t result = esp_now_send(relayMAC, (uint8_t*)&data[i], sizeof(sensorReadings));
+    if (result != ESP_OK) {
+      return false;
+    }
+    delay(10);  // Delay helps reduce chance of drops
+  }
+  return true;
+}
+
+// Send handshake request
+bool sendHandshake() {
+  gotAck = false;
+  const char* helloMsg = "HELLO";
+  esp_now_send(relayMAC, (uint8_t*)helloMsg, strlen(helloMsg));
+  
+  unsigned long start = millis();
+  while (millis() - start < 200) {
+    if (gotAck) return true;
+    delay(10);
+  }
+  return false;
+}
 
 
 void gotosleep() {
@@ -274,29 +176,13 @@ void killwifi() {
 }
 
 void transmitReadings() {
-  i=0;
-          while (i<maximumReadings) {
-            //if (WiFi.status() == WL_CONNECTED) {
-            doPg();
-            display.clearDisplay();   // clears the screen and buffer
-            display.setCursor(0,0);
-            display.print("TXing #");
-            display.print(i);
-            display.print(",");
-            display.println(arrayCnt);
-            display.display();
-
-            if ((pg_status == 2) && (i<maximumReadings)){
-              tosendstr = "insert into burst values (24,1," + String(Readings[i].time) + "," + String(Readings[i].temp1,3) + "), (24,2," + String(Readings[i].time) + "," + String(Readings[i].volts,4) + "), (24,3," + String(Readings[i].time) + "," + String(Readings[i].temp2,3) + "), (24,6," + String(Readings[i].time) + "," + String(Readings[i].pres,3) + ")";
-              conn.execute(tosendstr.c_str());
-              pg_status = 3;
-              delay(10);
-              i++;
-            }
-            delay(10);
-            
-          }
-          
+  display.clearDisplay();   // clears the screen and buffer
+  display.setCursor(0,0);
+  display.print("TXing #");
+  display.println(arrayCnt);
+  display.display();
+  if (readingCnt <= 0) return;
+  sendData(Readings, readingCnt);
 }
 
 
@@ -304,7 +190,14 @@ float readChannel(ADS1115_MUX channel) {
   float voltage = 0.0;
   adc.setCompareChannels(channel);
   adc.startSingleMeasurement();
-  while(adc.isBusy()){}
+  unsigned long start = millis();
+  while(adc.isBusy()) {
+    if (millis() - start > 200) { // 200ms timeout
+      Serial.println("ADC read timeout!");
+      return NAN; // or a safe default value
+    }
+    delay(1);
+  }
   voltage = adc.getResult_V(); // alternative: getResult_mV for Millivolt
   return voltage;
 }
@@ -326,8 +219,25 @@ void initTime(String timezone){
 
 }
 
+bool waitForTime(uint32_t timeout_ms = 3000) {
+  unsigned long start = millis();
+  while (!hasTimeBeenSet && (millis() - start < timeout_ms)) {
+    delay(10);  // Give time for OnDataRecv to handle incoming data
+  }
+  return hasTimeBeenSet;
+}
+
+
 void setup(void)
 {
+
+  Serial.begin(115200);
+
+ /* WiFi.begin();
+  delay(100); // Give time for WiFi stack to initialize
+
+  Serial.print("Relay MAC address: ");
+  Serial.println(WiFi.macAddress());*/
   sntp_set_time_sync_notification_cb(cbSyncTime);
   //setCpuFrequencyMhz(80);
    // 1x gain   +/- 4.096V  1 bit = 2mV      0.125mV
@@ -344,30 +254,27 @@ void setup(void)
   display.setCursor(0,0);
   display.setTextWrap(true);
   if ((readingCnt == -1)) {
-
-      WiFi.mode(WIFI_STA);
-      WiFi.begin((char *)ssid, pass);
-      WiFi.setTxPower(WIFI_POWER_8_5dBm);
+      initESPNOW();
       display.print("Connecting to get time...");
       display.display();
-      while ((WiFi.status() != WL_CONNECTED) && (millis() < WIFI_TIMEOUT)) {
-        delay(250);
-        display.print(".");
+      uint8_t dummy = 0;
+      esp_now_send(relayMAC, &dummy, sizeof(dummy));
+
+      if (!hasTimeBeenSet) {
+        display.println("Waiting for time from relay...");
         display.display();
-      }
-          display.clearDisplay();   // clears the screen and buffer
-          display.setCursor(0,0);
-          if (WiFi.status() == WL_CONNECTED) {
-            display.print("Connected. Getting time...");
-          }
-          else
-          {
-            display.print("Connection timed out. :(");
-          }
+        if (waitForTime(3000)) {
+          display.println("Time successfully set from relay");
           display.display();
-          initTime("EST5EDT,M3.2.0,M11.1.0");
-          //rtc.setTimeStruct(timeinfo);
-          killwifi();
+        } else {
+          display.println("Timeout: did not receive time");
+          display.display();
+          // Optional: go to sleep or fail safe
+        }
+      }
+
+          //initTime("EST5EDT,M3.2.0,M11.1.0");
+
           readingCnt = 0;
           delay(1);
           readingCnt = 0;
@@ -403,13 +310,13 @@ void setup(void)
   getLocalTime(&timeinfo);
   int hr12 = timeinfo.tm_hour;
   String AMPM;
-  if (hr12 >= 12) {
+  if (hr12 > 12) {
     hr12 -= 12;
     AMPM = "PM";
   }
   else {AMPM = "AM";}
   //if (hours == 12) {AMPM = "PM";}
-  if (hours == 0) {hours = 12;}
+  if (hr12 == 0) {hr12 = 12;}
 
 
   display.print(hr12);
@@ -460,21 +367,15 @@ void setup(void)
       //WiFi.setAutoReconnect(false);
       //WiFi.persistent(false);
       //WiFi.disconnect(false,true); 
-      WiFi.mode(WIFI_STA);
-      WiFi.begin((char *)ssid, pass);
-      WiFi.setTxPower(WIFI_POWER_8_5dBm);
+      initESPNOW();  
+
       display.clearDisplay();   // clears the screen and buffer
       display.setCursor(0,0);
       display.print("Connecting to transmit...");
       display.display();
-      while ((WiFi.status() != WL_CONNECTED) && (millis() < WIFI_TIMEOUT)) {
-        delay(250);
-        display.print(".");
-        display.display();
-      }
 
 
-      if ((WiFi.status() != WL_CONNECTED) && (millis() >= WIFI_TIMEOUT)) {
+      if (!sendHandshake()) {
 
         delay(1);
         ++arrayCnt;
@@ -484,6 +385,10 @@ void setup(void)
         killwifi();
         esp_sleep_enable_timer_wakeup(1 * 1000000);
         esp_deep_sleep_start();
+        display.clearDisplay();   // clears the screen and buffer
+        display.setCursor(0,0);
+        display.print("Timed out, saving to NVS...");
+        display.display();
         delay(1000);
       }
       display.clearDisplay();   // clears the screen and buffer
@@ -494,13 +399,14 @@ void setup(void)
       while (arrayCnt > 0) {
         display.clearDisplay();   // clears the screen and buffer
         display.setCursor(0,0);
-        display.print("Transmitting #");
-        display.print(arrayCnt);
+        display.print("TXing #");
+        display.println(arrayCnt);
         display.display();
-        delay(50);
+        //delay(50);
         prefs.getBytes(String(arrayCnt).c_str(), &Readings, sizeof(Readings));
+        sendData(Readings, maximumReadings);
         arrayCnt--;
-        transmitReadings();
+        
       }
       arrayCnt = 0;
       readingCnt = -1;
@@ -512,9 +418,9 @@ void setup(void)
       display.setCursor(0,0);
       display.print("Done.  Closing connection...");
       display.display();
-      conn.close();
+      //conn.close();
 
-      killwifi();
+
 
       ESP.restart();
   } 
